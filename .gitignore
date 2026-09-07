@@ -1,0 +1,26 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Build / runtime artifacts
+target/
+build/
+out/
+node_modules/
+*.log
+tmp/
+temp/
+
+# Agent scratch space
+.scratch/
+.local/
