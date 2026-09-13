@@ -1,0 +1,90 @@
+name: RocketMQ 11157 Reproduction
+
+on:
+  push:
+    branches:
+      - lab/rocketmq-11157-repro
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout evidence repository
+        uses: actions/checkout@v4
+        with:
+          path: lab
+
+      - name: Checkout RocketMQ PR head
+        uses: actions/checkout@v4
+        with:
+          repository: 3424672656/rocketmq
+          ref: b3b74908ce56a0c3f2eee8b30d632895002fdc1d
+          path: rocketmq
+          submodules: true
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: corretto
+          cache: maven
+          cache-dependency-path: rocketmq/pom.xml
+
+      - name: Inject independent regression test
+        shell: bash
+        run: |
+          cp \
+            lab/projects/rocketmq-11157/MessageRocksDBRollCursorRegressionTest.java \
+            rocketmq/store/src/test/java/org/apache/rocketmq/store/rocksdb/MessageRocksDBRollCursorRegressionTest.java
+
+      - name: Compile and prove the targeted regression
+        shell: bash
+        run: |
+          set +e
+          cd rocketmq
+          mvn -B -pl store -am \
+            -Dtest=MessageRocksDBRollCursorRegressionTest \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            test 2>&1 | tee ../rocketmq-11157-maven.log
+          mvn_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$mvn_status" -eq 0 ]; then
+            echo "ERROR: regression test unexpectedly passed on PR #11157 head"
+            exit 1
+          fi
+
+          if ! grep -R -F \
+            "A newly indexed 60h timer is behind PR #11157's initial ~70h cursor" \
+            store/target/surefire-reports >/dev/null 2>&1; then
+            echo "ERROR: Maven failed, but not because of the targeted regression assertion"
+            find . -path '*/target/surefire-reports/*' -type f -maxdepth 8 -print -exec tail -n 80 {} \; || true
+            exit 1
+          fi
+
+          echo "EXPECTED_REGRESSION_REPRODUCED"
+
+      - name: Run standalone lifecycle proof
+        shell: bash
+        run: |
+          cd lab/projects/rocketmq-11157
+          javac RocketMQ11157RollLifecycleProof.java
+          java RocketMQ11157RollLifecycleProof | tee ci-lifecycle-proof.out
+          grep -F "ALL_ASSERTIONS_PASSED" ci-lifecycle-proof.out
+
+      - name: Upload reproduction logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocketmq-11157-reproduction-logs
+          path: |
+            rocketmq-11157-maven.log
+            lab/projects/rocketmq-11157/ci-lifecycle-proof.out
+            rocketmq/store/target/surefire-reports
+          if-no-files-found: warn
+          retention-days: 7
